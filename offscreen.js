@@ -13,6 +13,7 @@
 // limitations under the License.
 
 chrome.runtime.onMessage.addListener(async (message) => {
+  console.log('onMessage:');
   if (message.target === 'offscreen') {
     switch (message.type) {
       case 'start-recording':
@@ -30,11 +31,7 @@ chrome.runtime.onMessage.addListener(async (message) => {
 let recorder;
 let data = [];
 
-let notionSecret="";
-let existingPageId="";
-let OPENAI_KEY="";
-let GPT_PROMPT_RECAP=""
-let language="en";
+let config = {};
  
 
 // Function to fetch and parse the config file
@@ -44,16 +41,13 @@ function loadConfig()
       .then(response => response.json())
       .then(data => {
           console.log('Configuration loaded:', data);
-          notionSecret=data.notionSecret;
-          existingPageId=data.existingPageId;
-          OPENAI_KEY=data.openAIKey;
-          GPT_PROMPT_RECAP=data.gptPrompt_recap;
-          language=data.language;
+          config = data;
       })
       .catch(error => console.error('Error loading configuration:', error));
 }
 
 async function startRecording(streamId) {
+  console.log('startRecording:', streamId);
   loadConfig();
   const currentDate = new Date().toLocaleString('en-US', { timeZone: 'UTC' });
   const transcript_title="Transcript "+ currentDate;
@@ -75,23 +69,23 @@ async function startRecording(streamId) {
   const source = output.createMediaStreamSource(media);
   source.connect(output.destination);
 
-  const microphone = await navigator.mediaDevices.getUserMedia({audio: true});
+  // const microphone = await navigator.mediaDevices.getUserMedia({audio: true});
 
-  const mixedContext = new AudioContext();
-  const mixedDest = mixedContext.createMediaStreamDestination();
+  // const mixedContext = new AudioContext();
+  // const mixedDest = mixedContext.createMediaStreamDestination();
 
-  mixedContext.createMediaStreamSource(microphone).connect(mixedDest);
-  mixedContext.createMediaStreamSource(media).connect(mixedDest);
+  // mixedContext.createMediaStreamSource(microphone).connect(mixedDest);
+  // mixedContext.createMediaStreamSource(media).connect(mixedDest);
 
-  const combinedStream = new MediaStream([
-    mixedDest.stream.getTracks()[0]
-  ]);
+  // const combinedStream = new MediaStream([
+  //   mixedDest.stream.getTracks()[0]
+  // ]);
 
   // Start recording.
-  recorder = new MediaRecorder(combinedStream, { mimeType: 'audio/webm' });
+  recorder = new MediaRecorder(media, { mimeType: 'audio/webm; codecs=opus' });
   recorder.ondataavailable = (event) => data.push(event.data);
   recorder.onstop = () => {
-    const blob = new Blob(data, { type: 'audio/webm' });
+    const blob = new Blob(data, { type: 'audio/ogg; codecs=opus' });
     const url = URL.createObjectURL(blob);
   
     // Create a new anchor element
@@ -99,7 +93,7 @@ async function startRecording(streamId) {
     
     // Set the href and download attributes for the anchor element
     a.href = url;
-    a.download = transcript_title+'.webm'; // You can name the file here
+    a.download = transcript_title+'.ogg'; // You can name the file here
     
     // Append the anchor to the document
     document.body.appendChild(a);
@@ -114,32 +108,29 @@ async function startRecording(streamId) {
     console.log("Audio blob saved");
 
     // Step 1: Convert Blob to File
-    const audioFile = new File([blob], "audio.webm", { type: 'audio/webm' });
+    const audioFile = new File([blob], "audio.ogg; codecs=opus", { type: 'audio/ogg; codecs=opus' });
 
     console.log("Audio file prepared");
 
     // Step 2: Prepare FormData
     const formData = new FormData();
-    formData.append("file", audioFile);
-    formData.append("model","whisper-1");
-    formData.append("language",language);
+    formData.append("audio", audioFile);
 
     console.log("Form data prepared");
 
     // Step 3: Set up HTTP Request
-    const whisperAPIEndpoint = "https://api.openai.com/v1/audio/transcriptions";
-    fetch(whisperAPIEndpoint, {
+    fetch(config.SBER_API_ENDPOINT, {
         method: 'POST',
         headers: {
-            'Authorization': 'Bearer ' + OPENAI_KEY
+            'Authorization': 'Bearer ' + config.SBER_ACCESS_TOKEN,
+            'Content-Type': 'multipart/form-data'
         },
         body: formData
     })
     .then(response => response.json())
     .then(data => {
         // Step 4: Handle Response
-        console.log("Transcription: ", data.text); // Display or process the transcription
-        askGPTRecap(transcript_title,data.text);
+        console.log("Transcription: ", data); // Display or process the transcription
     })
     .catch(error => {
         console.error("Error: ", error);
@@ -176,102 +167,4 @@ async function stopRecording() {
   // make sure the browser keeps the Object URL we create (see above) and to
   // keep the sample fairly simple to follow.
 }
-
-async function askGPTRecap(transcript_title,transcript)
-{
-  fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer '+ OPENAI_KEY
-    },
-    body: JSON.stringify({
-      "model": "gpt-3.5-turbo-1106",
-      "messages": [
-        {
-          "role": "system",
-          "content": GPT_PROMPT_RECAP
-        },
-        {
-          "role": "user",
-          "content": transcript
-        }
-      ]
-    })
-  })
-  .then(response => response.json())
-  .then(data => 
-    {
-      console.log(data);
-      let notes = data.choices[0].message.content;
-      pushToNotion(transcript_title,transcript,notes);
-    })
-  .catch(error => console.error('Error:', error));
-}
-
-async function pushToNotion(transcript_title,transcript,notes) {
-
-  // Split transcript into chunks of 2000 characters
-  const chunkSize = 2000;
-  const transcriptChunks = [];
-  
-  for (let i = 0; i < transcript.length; i += chunkSize) {
-    transcriptChunks.push(transcript.substring(i, i + chunkSize));
-  }
-
-  // Prepare children blocks with split transcript
-  const childrenBlocks = [
-    {
-      "object": "block",
-      "type": "heading_1",
-      "heading_1": {
-        "rich_text": [{ "type": "text", "text": { "content": "Transcript" } }]
-      }
-    },
-    ...transcriptChunks.map(chunk => ({
-      "object": "block",
-      "type": "paragraph",
-      "paragraph": {
-        "rich_text": [{ "type": "text", "text": { "content": chunk } }]
-      }
-    })),
-    {
-      "object": "block",
-      "type": "heading_1",
-      "heading_1": {
-        "rich_text": [{ "type": "text", "text": { "content": "Notes" } }]
-      }
-    },
-    {
-      "object": "block",
-      "type": "paragraph",
-      "paragraph": {
-        "rich_text": [{ "type": "text", "text": { "content": notes } }]
-      }
-    }
-  ];
-  
-  // Example of creating a new page in Notion
-  fetch('https://api.notion.com/v1/pages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${notionSecret}`,
-      'Notion-Version': '2022-06-28'
-    },
-    body: JSON.stringify({ 
-      "parent": { "page_id": existingPageId},
-      "properties": {
-        "title": {
-          "title": [{ "type": "text", "text": { "content": transcript_title } }]
-        }
-      },
-      "children": childrenBlocks
-    })
-  })
-  .then(response => response.json())
-  .then(data => console.log(data))
-  .catch(error => console.error('Error:', error));
-}
-
 
