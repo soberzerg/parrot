@@ -9,15 +9,21 @@
   },
   "icons": {
     "128": "icons/not-recording.png"
-  },  
+  },
   "background": {
     "service_worker": "service-worker.js"
   },
-  "host_permissions": [
-  ],
+  "host_permissions": ["http://localhost:8021/"],
   "permissions": [
     "tabCapture",
     "offscreen",
-    "storage"
-  ]
+    "storage",
+    "identity",
+    "nativeMessaging",
+    "tabs",
+    "webRequest"
+  ],
+  "content_security_policy": {
+    "script-src": ["'self'", "http://localhost:*"]
+  }
 }
